@@ -21,14 +21,14 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Search query — keywords separated by spaces. All must match (AND). Partial matches (≥half terms) shown after." }),
-      role: Type.Optional(Type.String({ description: "Filter by role: 'user', 'assistant', or omit for all" })),
+      role: Type.Optional(Type.String({ description: "Filter by role, comma-separated: 'user', 'assistant', 'toolResult', or omit for all" })),
       order: Type.Optional(Type.String({ description: "Sort order: 'relevance' (AND first, default) or 'time' (chronological)" })),
       limit: Type.Optional(Type.Number({ description: "Max results to return (default 10)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const entries = ctx.sessionManager.getEntries();
       const query = params.query.toLowerCase();
-      const role = params.role?.toLowerCase();
+      const roleFilter = params.role ? new Set(params.role.toLowerCase().split(',').map(s => s.trim()).filter(Boolean)) : null;
       const order = params.order ?? "relevance";
       const limit = params.limit ?? 10;
 
@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
         if (!msg) continue;
 
         // Role filter
-        if (role && msg.role !== role) continue;
+        if (roleFilter && !roleFilter.has(msg.role)) continue;
 
         // Extract text content
         let text = "";
