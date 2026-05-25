@@ -34,8 +34,10 @@ export default function (pi: ExtensionAPI) {
 
       const results: { sortKey: number; idx: number; line: string }[] = [];
       let count = 0;
+      let entryIdx = 0;
 
       for (const entry of entries) {
+        entryIdx++;
         if (entry.type !== "message") continue;
         const msg = (entry as any).message;
         if (!msg) continue;
@@ -71,7 +73,7 @@ export default function (pi: ExtensionAPI) {
         const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "?";
         const tag = isAnd ? "" : "partial";
         const relevance = `${matchCount}/${terms.length}`;
-        results.push({ sortKey: isAnd ? 0 : 1, idx: count, line: `[${count}] ${msg.role} (${ts}) relevance:${relevance} ${tag}id:${entry.id}:\n${preview}` });
+        results.push({ sortKey: isAnd ? 0 : 1, idx: count, line: `[${count}] ${msg.role} (${ts}) relevance:${relevance} ${tag}id:${entry.id} #${entryIdx}:\n${preview}` });
       }
 
       if (results.length === 0) {
@@ -114,43 +116,74 @@ export default function (pi: ExtensionAPI) {
     name: "session_read",
     label: "Session Read",
     description:
-      "Read the full content of one or more messages from the current session by entry id. Use after session_search to get complete text of matched entries. Supports multiple ids separated by commas.",
+      "Read the full content of messages from the current session by entry id. Use after session_search to get complete text. Supports multiple ids and optional context (surrounding messages before/after).",
     promptSnippet: "Read full message(s) by entry id",
     promptGuidelines: [
       "Use session_read after session_search to get the full content of interesting entries.",
       "Pass multiple comma-separated ids to read several messages at once.",
+      "Use 'context' to include N messages before and after each target for surrounding context (e.g. the question that led to an answer).",
     ],
     parameters: Type.Object({
       ids: Type.String({ description: "Entry id(s) from session_search, comma-separated (e.g. 'abc123,def456')" }),
+      context: Type.Optional(Type.Number({ description: "Number of surrounding messages to include before and after each target (default 0, no context)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const idList = params.ids.split(",").map(s => s.trim()).filter(Boolean);
       if (idList.length === 0) return err("No entry ids provided.");
+      const ctxN = params.context ?? 0;
 
       const entries = ctx.sessionManager.getEntries();
-      const byId = new Map<string, any>();
-      for (const e of entries) byId.set(e.id, e);
+      // Build id → array index map
+      const idToIdx = new Map<string, number>();
+      const messageIndices: number[] = [];
+      for (let i = 0; i < entries.length; i++) {
+        idToIdx.set(entries[i].id, i);
+        if (entries[i].type === "message") messageIndices.push(i);
+      }
+
+      function extractText(msg: any): string {
+        if (typeof msg.content === "string") return msg.content;
+        if (Array.isArray(msg.content)) {
+          let t = "";
+          for (const part of msg.content) {
+            if (typeof part === "string") t += part + " ";
+            else if (part?.type === "text") t += part.text + " ";
+          }
+          return t;
+        }
+        return "";
+      }
 
       const results: string[] = [];
       const missing: string[] = [];
+      const rendered = new Set<number>(); // avoid duplicate output
 
       for (const eid of idList) {
-        const entry = byId.get(eid);
-        if (!entry || entry.type !== "message") { missing.push(eid); continue; }
-        const msg = entry.message;
+        const arrIdx = idToIdx.get(eid);
+        if (arrIdx === undefined) { missing.push(eid); continue; }
+        const entry = entries[arrIdx];
+        if (entry.type !== "message") { missing.push(eid); continue; }
 
-        let text = "";
-        if (typeof msg.content === "string") {
-          text = msg.content;
-        } else if (Array.isArray(msg.content)) {
-          for (const part of msg.content) {
-            if (typeof part === "string") text += part + " ";
-            else if (part?.type === "text") text += part.text + " ";
-          }
+        // Find the range of message indices to include
+        const msgPosInList = messageIndices.indexOf(arrIdx);
+        const start = Math.max(0, msgPosInList - ctxN);
+        const end = Math.min(messageIndices.length - 1, msgPosInList + ctxN);
+
+        for (let mi = start; mi <= end; mi++) {
+          const idx = messageIndices[mi];
+          if (rendered.has(idx)) continue;
+          rendered.add(idx);
+
+          const e = entries[idx];
+          const msg = (e as any).message;
+          const text = extractText(msg);
+          const ts = e.timestamp ? new Date(e.timestamp).toLocaleString() : "?";
+          const isTarget = e.id === eid;
+          const marker = isTarget ? "▶" : " ";
+          const dist = mi - msgPosInList;
+          const ctxLabel = dist === 0 ? "" : dist > 0 ? `(+${dist})` : `(${dist})`;
+          results.push(`${marker}─── ${msg.role} (${ts})${ctxLabel} id:${e.id} ───\n${text}`);
         }
-
-        const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "?";
-        results.push(`─── ${msg.role} (${ts}) id:${eid} ───\n${text}`);
       }
 
       let output = results.join("\n\n");
