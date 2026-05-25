@@ -1,0 +1,13 @@
+{
+  "name": "pi-session-search",
+  "version": "1.0.0",
+  "description": "Search through pi conversation history — current session and across all sessions.",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}
