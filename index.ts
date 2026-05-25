@@ -20,17 +20,19 @@ export default function (pi: ExtensionAPI) {
       "Searches are case-insensitive and match against message content.",
     ],
     parameters: Type.Object({
-      query: Type.String({ description: "Search query — keyword or phrase to find in messages" }),
+      query: Type.String({ description: "Search query — keywords separated by spaces. All must match (AND). Partial matches (≥half terms) shown after." }),
       role: Type.Optional(Type.String({ description: "Filter by role: 'user', 'assistant', or omit for all" })),
+      order: Type.Optional(Type.String({ description: "Sort order: 'relevance' (AND first, default) or 'time' (chronological)" })),
       limit: Type.Optional(Type.Number({ description: "Max results to return (default 10)" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const entries = ctx.sessionManager.getEntries();
       const query = params.query.toLowerCase();
       const role = params.role?.toLowerCase();
+      const order = params.order ?? "relevance";
       const limit = params.limit ?? 10;
 
-      const results: string[] = [];
+      const results: { sortKey: number; idx: number; line: string }[] = [];
       let count = 0;
 
       for (const entry of entries) {
@@ -67,16 +69,22 @@ export default function (pi: ExtensionAPI) {
         // Short preview for scanability, with entry id for retrieval
         const preview = text.length > 400 ? text.slice(0, 400) + "..." : text;
         const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "?";
-        const tag = isAnd ? "" : " [partial]";
-        results.push({ sortKey: isAnd ? 0 : 1, line: `[${count}] ${msg.role} (${ts})${tag} id:${entry.id}:\n${preview}` });
+        const tag = isAnd ? "" : "partial";
+        const relevance = `${matchCount}/${terms.length}`;
+        results.push({ sortKey: isAnd ? 0 : 1, idx: count, line: `[${count}] ${msg.role} (${ts}) relevance:${relevance} ${tag}id:${entry.id}:\n${preview}` });
       }
 
       if (results.length === 0) {
         return { content: [{ type: "text", text: `No messages matching "${params.query}" found in current session.` }] };
       }
 
-      // Sort: AND matches first, then OR matches; each group by time (newest first)
-      results.sort((a, b) => a.sortKey - b.sortKey);
+      // Sort: 'relevance' = AND first then by match count desc; 'time' = chronological
+      if (order === "time") {
+        // results already in chronological order (we iterated entries in order)
+      } else {
+        // AND first, then partial sorted by idx (time)
+        results.sort((a, b) => a.sortKey - b.sortKey || a.idx - b.idx);
+      }
       const shown = results.slice(0, limit);
       const andCount = results.filter(r => r.sortKey === 0).length;
       const orCount = results.filter(r => r.sortKey === 1).length;
